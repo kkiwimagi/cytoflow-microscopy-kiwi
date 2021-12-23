@@ -1,5 +1,4 @@
-# Cytoflow this is forked from Tim who forked it from Brian.....need to update documentation
-## New features include the ability to take in .csv files instead of .fcs files.
+# Cytoflow this incomplete.....UNDERCONSTRUCTION
 
 ## Python tools for quantitative, reproducible flow cytometry analysis
 
