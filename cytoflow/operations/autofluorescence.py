@@ -130,7 +130,7 @@ class AutofluorescenceOp(HasStrictTraits):
     _af_histogram = Dict(Str, Tuple(Array, Array), transient = True)
 
     
-    def estimate(self, experiment, subset = None): 
+    def estimate(self, experiment, subset = None, passInBackgroundValues = False, backgroundValues = []): 
         """
         Estimate the autofluorescence from :attr:`blank_file` in channels
         specified in :attr:`channels`.  
@@ -145,6 +145,7 @@ class AutofluorescenceOp(HasStrictTraits):
             autofluorescence
 
         """
+        
         if experiment is None:
             raise util.CytoflowOpError('experiment', 
                                        "No experiment specified")
@@ -164,69 +165,92 @@ class AutofluorescenceOp(HasStrictTraits):
         self._af_median.clear()
         self._af_stdev.clear()
         self._af_histogram.clear()
-        
-        # make a little Experiment
-        conditions = {k: experiment.data[k].dtype.name for k in self.blank_file_conditions.keys()}
-        channels = {experiment.metadata[c]["fcs_name"] : c for c in experiment.channels}
-        name_metadata = experiment.metadata['name_metadata']
-        if ( self.blank_file != '' ):
-            check_tube(self.blank_file, experiment)
-            blank_exp = ImportOp(tubes = [Tube(file = self.blank_file,
-                                               conditions = self.blank_file_conditions)], 
-                                 conditions = conditions,
-                                 channels = channels,
-                                 name_metadata = name_metadata).apply()
+
+        #############################
+        # Kiwi added here 3/21/22
+        #############################
+        if passInBackgroundValues:
+            blank_exp = backgroundValues
+            for channel in self.channels:
+                if self.bins.any():
+                    bins = self.bins
+                else:
+                    bins = 250
+                    
+                self._af_histogram[channel] = np.histogram(blank_exp[channel], bins = bins)
+            
+                channel_min = blank_exp[channel].quantile(0.025)
+                channel_max = blank_exp[channel].quantile(0.975)
+            
+                blank_exp[channel] = blank_exp[channel].clip(channel_min,
+                                                             channel_max)
+            
+                self._af_median[channel] = np.median(blank_exp[channel])
+                self._af_stdev[channel] = np.std(blank_exp[channel])
         else:
-            blank_exp = ImportOp(tubes = [Tube(frame = self.blank_frame,
-                                               conditions = self.blank_file_conditions)], 
-                                 conditions = conditions,
-                                 channels = channels,
-                                 name_metadata = name_metadata).apply()
-        # apply previous operations
-        for op in experiment.history:
-            if hasattr(op, 'by'):
-                for by in op.by:
-                    if 'experiment' in experiment.metadata[by]:
-                        warn("Found experimental metadata {} in experiment history; "
-                             "make sure it's specified in blank_file_conditions."
-                             .format(by),
-                             util.CytoflowOpWarning)
+            # make a little Experiment
+            conditions = {k: experiment.data[k].dtype.name for k in self.blank_file_conditions.keys()}
+            channels = {experiment.metadata[c]["fcs_name"] : c for c in experiment.channels}
+            name_metadata = experiment.metadata['name_metadata']
+            if ( self.blank_file != '' ):
+                check_tube(self.blank_file, experiment)
+                blank_exp = ImportOp(tubes = [Tube(file = self.blank_file,
+                                                   conditions = self.blank_file_conditions)],
+                                     conditions = conditions,
+                                     channels = channels,
+                                     name_metadata = name_metadata).apply()
+            else:
+                blank_exp = ImportOp(tubes = [Tube(frame = self.blank_frame,
+                                                   conditions = self.blank_file_conditions)], 
+                                     conditions = conditions,
+                                     channels = channels,
+                                     name_metadata = name_metadata).apply()
+        
+            # apply previous operations
+            for op in experiment.history:
+                if hasattr(op, 'by'):
+                    for by in op.by:
+                        if 'experiment' in experiment.metadata[by]:
+                            warn("Found experimental metadata {} in experiment history; "
+                                 "make sure it's specified in blank_file_conditions."
+                                 .format(by),
+                                 util.CytoflowOpWarning)
 
                     
-            blank_exp = op.apply(blank_exp)
+                blank_exp = op.apply(blank_exp)
             
-        # subset it
-        if subset:
-            try:
-                blank_exp = blank_exp.query(subset)
-            except Exception as exc:
-                raise util.CytoflowOpError('subset', 
-                                           "Subset string '{0}' isn't valid"
-                                           .format(subset)) from exc
+            # subset it
+            if subset:
+                try:
+                    blank_exp = blank_exp.query(subset)
+                except Exception as exc:
+                    raise util.CytoflowOpError('subset', 
+                                               "Subset string '{0}' isn't valid"
+                                               .format(subset)) from exc
                             
-            if len(blank_exp.data) == 0:
-                raise util.CytoflowOpError('subset',
-                                           "Subset string '{0}' returned no events"
-                                      .format(subset))
+                if len(blank_exp.data) == 0:
+                    raise util.CytoflowOpError('subset',
+                                               "Subset string '{0}' returned no events"
+                                               .format(subset))
         
-        for channel in self.channels:
-            if self.bins.any():
-                bins = self.bins
-            else:
-                bins = 250
-
-            self._af_histogram[channel] = np.histogram(blank_exp[channel], bins = bins)
+            for channel in self.channels:
+                if self.bins.any():
+                    bins = self.bins
+                else:
+                    bins = 250
+                    
+                self._af_histogram[channel] = np.histogram(blank_exp[channel], bins = bins)
             
-            channel_min = blank_exp[channel].quantile(0.025)
-            channel_max = blank_exp[channel].quantile(0.975)
+                channel_min = blank_exp[channel].quantile(0.025)
+                channel_max = blank_exp[channel].quantile(0.975)
             
-            blank_exp[channel] = blank_exp[channel].clip(channel_min,
-                                                         channel_max)
+                blank_exp[channel] = blank_exp[channel].clip(channel_min,
+                                                             channel_max)
             
-            self._af_median[channel] = np.median(blank_exp[channel])
-            self._af_stdev[channel] = np.std(blank_exp[channel])    
+                self._af_median[channel] = np.median(blank_exp[channel])
+                self._af_stdev[channel] = np.std(blank_exp[channel])    
                 
-    def apply(self, experiment):
+    def apply(self,experiment):
         """
         Applies the autofluorescence correction to channels in an experiment.
         
